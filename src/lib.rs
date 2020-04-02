@@ -116,7 +116,6 @@ where
                 if let Some(new) = old {
                     new
                 } else {
-                    // TODO: Add in dep solving for things above
                     g.get(new_ref)
                 }
             }),
