@@ -260,7 +260,7 @@ mod tests {
         let graph2 = &graph;
         let mut v1 = graph2.initial(1);
         let mut v2 = graph.initial(2);
-        let mut result = graph.compute(Box::new(move || v1() + v2()));
+        let mut result = graph.compute(move || v1() + v2());
         let res_val = result();
         assert_eq!(res_val, 3);
     }
