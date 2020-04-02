@@ -91,6 +91,8 @@ impl<T> InternalGraph<T> {
         content.len() - 1
     }
 
+    fn set_dirty(&self, val_ref: ValueRef) {}
+
     // fn get_value(&self) -> &'a mut Value<'a, T> {
 
     // }
@@ -109,25 +111,18 @@ where
         }
     }
 
-    pub fn initial<'a, 'b: 'a>(&'b self, initial: T) -> impl FnMut() -> T {
+    pub fn initial<'a, 'b: 'a>(&'b self, initial: T) -> Node<T> {
         let value = Value::Base(BaseValue {
-            dirty: false,
+            dirty: true,
             epoch: 0,
             value: initial,
             deps: vec![],
         });
         let inner_graph = self.inner.borrow_mut();
         let value_ref = inner_graph.push_value(value);
-        let new_node = Node {
+        Node {
             value_ref,
             parent_graph: self.inner.clone(),
-        };
-
-        move || {
-            new_node
-                .parent_graph
-                .borrow()
-                .with_value(value_ref, |v| *v.value())
         }
     }
 
@@ -138,10 +133,7 @@ where
         f(&self.inner.borrow())
     }
 
-    pub fn compute<'a, 'b: 'a, F: 'static + FnMut() -> T>(
-        &'b self,
-        mut f: F,
-    ) -> impl 'a + FnMut() -> T {
+    pub fn compute<F: FnMut() -> T + 'static>(&self, mut f: F) -> Node<T> {
         let (value_ref, parent_deps) =
             self.inner_borrow(|g| (g.next_ref(), g.replace_deps(vec![])));
 
@@ -155,7 +147,7 @@ where
         };
 
         let value: Value<T> = Value::Res(ResultValue {
-            dirty: false,
+            dirty: true,
             epoch: 0,
             value: res_value,
             deps: my_deps,
@@ -197,29 +189,10 @@ where
             }),
         });
         self.inner_borrow(move |g| g.push_value(value));
-        move || {
-            self.inner_borrow(|g: &InternalGraph<T>| {
-                g.with_value(value_ref, |v| match v {
-                    Value::Res(ref mut v) => (v.generator)(g),
-                    _ => panic!("This should never happen"),
-                })
-            })
+        Node {
+            value_ref,
+            parent_graph: self.inner.clone(),
         }
-    }
-    //
-
-    fn set_dirty(&self, value_ref: ValueRef) {
-        todo!();
-        // if let Some(ref deps) = value.deps {
-        //     for parent_ref in deps {
-        //         if let Some(dependent_value_cell) = inner_graph.content.get(*parent_ref)
-        //         {
-        //             let dependent_value: &mut Value<T> =
-        //                 &mut dependent_value_cell.borrow_mut();
-        //             dependent_value.set_dirty(true);
-        //         }
-        //     }
-        // }
     }
 }
 pub struct Node<T> {
@@ -227,7 +200,37 @@ pub struct Node<T> {
     parent_graph: Rc<RefCell<InternalGraph<T>>>,
 }
 
-impl<'a, T> Node<T> {
+pub struct SettableNode<T> {
+    inner: Node<T>,
+}
+
+impl<T> SettableNode<T>
+where
+    T: Copy + Clone,
+{
+    pub fn get(&self) -> T {
+        self.inner.get()
+    }
+    pub fn set(&self, t: T) {
+        self.inner
+            .parent_graph
+            .borrow()
+            .with_value(self.inner.value_ref, |v| v.set_value(t));
+        (*self.inner.parent_graph.borrow()).set_dirty(self.inner.value_ref)
+    }
+}
+
+impl<T> Node<T>
+where
+    T: Copy + Clone,
+{
+    pub fn get(&self) -> T {
+        let g = &self.parent_graph.borrow();
+        g.with_value(self.value_ref, |v| match v {
+            Value::Res(ref mut v) => (v.generator)(g),
+            Value::Base(ref mut v) => v.value,
+        })
+    }
     // pub fn and(&self, other: &Node<T>) -> Node<T> {
     //     let value = Value::Res(ResultValue {
     //         epoch: 0,
@@ -258,10 +261,16 @@ mod tests {
     fn graph() {
         let graph = Graph::<usize>::new();
         let graph2 = &graph;
-        let mut v1 = graph2.initial(1);
-        let mut v2 = graph.initial(2);
-        let mut result = graph.compute(move || v1() + v2());
-        let res_val = result();
-        assert_eq!(res_val, 3);
+        let a = graph2.initial(5);
+        let b = graph2.initial(4);
+        let c = graph.compute(move || a.get() + 6);
+        let d = graph.compute(move || c.get() + b.get());
+        assert_eq!(d.get(), 15);
+        // let mut v1 = graph2.initial(1);
+        // let mut v2 = graph.initial(2);
+        // let mut v1v2 = graph.compute(move || v1() + v2());
+        // let mut result = graph.compute(move || v1v2() + 5);
+        // let res_val = result();
+        // assert_eq!(res_val, 3);
     }
 }
