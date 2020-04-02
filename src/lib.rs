@@ -3,50 +3,26 @@ use std::rc::Rc;
 
 type ValueRef = usize;
 
-struct BaseValue<T> {
+struct Value<T> {
     dirty: bool,
     epoch: usize,
-    value: T,
-    deps: Vec<usize>,
-}
-
-struct ResultValue<T> {
-    dirty: bool,
-    epoch: usize,
-    generator: Box<(dyn FnMut(&InternalGraph<T>) -> T)>,
+    generator: Box<(dyn FnMut(&InternalGraph<T>, Option<T>) -> T)>,
     deps: Option<Vec<usize>>,
     value: T,
 }
 
-enum Value<T> {
-    Res(ResultValue<T>),
-    Base(BaseValue<T>),
-}
-
-impl<'a, T> Value<T> {
+impl<T> Value<T> {
     fn value(&self) -> &T {
-        match self {
-            Self::Res(v) => &v.value,
-            Self::Base(v) => &v.value,
-        }
+        &self.value
     }
     fn set_dirty(&mut self, value: bool) {
-        match self {
-            Self::Res(v) => v.dirty = value,
-            Self::Base(v) => v.dirty = value,
-        }
+        self.dirty = value;
     }
     fn is_dirty(&self) -> bool {
-        match self {
-            Self::Res(v) => v.dirty,
-            Self::Base(v) => v.dirty,
-        }
+        self.dirty
     }
     fn set_value(&mut self, t: T) {
-        match self {
-            Self::Res(v) => v.value = t,
-            Self::Base(v) => v.value = t,
-        }
+        self.value = t;
     }
 }
 
@@ -61,7 +37,10 @@ struct InternalGraph<T> {
     content: RefCell<Vec<RefCell<Value<T>>>>,
 }
 
-impl<T> InternalGraph<T> {
+impl<T> InternalGraph<T>
+where
+    T: Copy,
+{
     fn replace_deps(&self, new: Vec<ValueRef>) -> Option<Vec<ValueRef>> {
         self.current_execution_deps.borrow_mut().replace(new)
     }
@@ -85,22 +64,30 @@ impl<T> InternalGraph<T> {
         }
     }
 
+    fn get(&self, val_ref: ValueRef) -> T {
+        if let Some(v) = self.content.borrow().get(val_ref) {
+            *v.borrow().value()
+        } else {
+            panic!("this should never happen")
+        }
+    }
+
     fn push_value(&self, value: Value<T>) -> ValueRef {
         let mut content = self.content.borrow_mut();
         content.push(RefCell::new(value));
         content.len() - 1
     }
 
-    fn set_dirty(&self, val_ref: ValueRef) {}
-
-    // fn get_value(&self) -> &'a mut Value<'a, T> {
-
-    // }
+    fn set_dirty(&self, val_ref: ValueRef) {
+        if let Some(value) = self.content.borrow().get(val_ref) {
+            let deps = value.borrow_mut();
+        }
+    }
 }
 
 impl<T> Graph<T>
 where
-    T: Copy + Clone,
+    T: Copy + Clone + std::fmt::Display + std::fmt::Debug,
 {
     pub fn new() -> Self {
         Self {
@@ -112,13 +99,22 @@ where
     }
 
     pub fn initial<'a, 'b: 'a>(&'b self, initial: T) -> Node<T> {
-        let value = Value::Base(BaseValue {
+        let inner_graph = self.inner.borrow_mut();
+        let new_ref = inner_graph.next_ref();
+        let value = Value {
             dirty: true,
             epoch: 0,
             value: initial,
-            deps: vec![],
-        });
-        let inner_graph = self.inner.borrow_mut();
+            generator: Box::new(move |g, new_opt| {
+                if let Some(new) = new_opt {
+                    new
+                } else {
+                    // TODO: Add in dep solving for things above
+                    g.get(new_ref)
+                }
+            }),
+            deps: None,
+        };
         let value_ref = inner_graph.push_value(value);
         Node {
             value_ref,
@@ -146,48 +142,23 @@ where
             self.inner_borrow(|g| g.take_deps())
         };
 
-        let value: Value<T> = Value::Res(ResultValue {
+        let value: Value<T> = Value {
             dirty: true,
             epoch: 0,
             value: res_value,
             deps: my_deps,
-            generator: Box::new(move |g| {
-                // let is_dirty = self.inner_borrow(|g| {
-                //     // this is being called in a compilation context
-                //     if let Some(ref mut parent_deps) = &mut g.current_execution_deps {
-                //         parent_deps.push(value_ref);
-                //     };
-                //     // TODO: this can be done with unsafe since no two indices will be borrowed at the same time
-                //     g.content[value_ref].borrow().is_dirty()
-                // });
-                // if is_dirty {
-                //     let generator = self.inner_borrow(|g| {
-                //         let value_cell = &g.content[value_ref];
-                //         let value: &mut Value<T> = &mut value_cell.borrow_mut();
-                //         if let Value::Res(ref mut value) = value {
-                //             value.generator
-                //         } else {
-                //             panic!("This should never happen");
-                //         }
-                //     });
-                //     let new_value: T = generator();
-                //     self.inner_borrow(|g| {
-                //         let value_cell = &g.content[value_ref];
-                //         let value: &mut Value<T> = &mut value_cell.borrow_mut();
-                //         value.set_value(new_value);
-                //         value.set_dirty(false);
-                //     });
-                //     new_value
-                // } else {
-                //     self.inner_borrow(|g| {
-                //         let value_cell = &g.content[value_ref];
-                //         let value: &mut Value<T> = &mut value_cell.borrow();
-                //         *value.value()
-                //     })
-                // }
+            generator: Box::new(move |g, old| {
+                let mut parent_deps = g
+                    .current_execution_deps
+                    .try_borrow_mut()
+                    .unwrap_or_else(|_| panic!("value: {:?}", old));
+                if let Some(ref mut parent_deps) = *parent_deps {
+                    parent_deps.push(value_ref);
+                };
+                drop(parent_deps);
                 f()
             }),
-        });
+        };
         self.inner_borrow(move |g| g.push_value(value));
         Node {
             value_ref,
@@ -227,8 +198,20 @@ where
     pub fn get(&self) -> T {
         let g = &self.parent_graph.borrow();
         g.with_value(self.value_ref, |v| match v {
-            Value::Res(ref mut v) => (v.generator)(g),
-            Value::Base(ref mut v) => v.value,
+            Value {
+                generator,
+                dirty: true,
+                mut value,
+                ..
+            } => {
+                value = (generator)(g, Some(value));
+                value
+            }
+            Value {
+                dirty: false,
+                value,
+                ..
+            } => *value,
         })
     }
     // pub fn and(&self, other: &Node<T>) -> Node<T> {
@@ -264,7 +247,7 @@ mod tests {
         let a = graph2.initial(5);
         let b = graph2.initial(4);
         let c = graph.compute(move || a.get() + 6);
-        let d = graph.compute(move || c.get() + b.get());
+        let d = graph.compute(move || b.get() + c.get());
         assert_eq!(d.get(), 15);
         // let mut v1 = graph2.initial(1);
         // let mut v2 = graph.initial(2);
