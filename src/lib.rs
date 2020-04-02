@@ -98,7 +98,7 @@ where
         }
     }
 
-    pub fn initial<'a, 'b: 'a>(&'b self, initial: T) -> Node<T> {
+    pub fn initial<'a, 'b: 'a>(&'b self, initial: T) -> SettableNode<T> {
         let inner_graph = self.inner.borrow_mut();
         let new_ref = inner_graph.next_ref();
         let value = Value {
@@ -116,9 +116,11 @@ where
             deps: None,
         };
         let value_ref = inner_graph.push_value(value);
-        Node {
-            value_ref,
-            parent_graph: self.inner.clone(),
+        SettableNode {
+            inner: Node {
+                value_ref,
+                parent_graph: self.inner.clone(),
+            },
         }
     }
 
@@ -166,11 +168,14 @@ where
         }
     }
 }
+
+#[derive(Clone)]
 pub struct Node<T> {
     value_ref: ValueRef,
     parent_graph: Rc<RefCell<InternalGraph<T>>>,
 }
 
+#[derive(Clone)]
 pub struct SettableNode<T> {
     inner: Node<T>,
 }
@@ -214,20 +219,6 @@ where
             } => *value,
         })
     }
-    // pub fn and(&self, other: &Node<T>) -> Node<T> {
-    //     let value = Value::Res(ResultValue {
-    //         epoch: 0,
-    //         value: None,
-    //         deps: vec![self.value_ref, other.value_ref],
-    //     });
-    //     let mut graph = self.parent_graph.borrow_mut();
-    //     let value_ref = graph.content.len();
-    //     graph.content.push(value);
-    //     Node {
-    //         value_ref,
-    //         parent_graph: self.parent_graph.clone(),
-    //     }
-    // }
 }
 
 trait Query {}
@@ -241,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn graph() {
+    fn graph1() {
         let graph = Graph::<usize>::new();
         let graph2 = &graph;
         let a = graph2.initial(5);
@@ -249,11 +240,19 @@ mod tests {
         let c = graph.compute(move || a.get() + 6);
         let d = graph.compute(move || b.get() + c.get());
         assert_eq!(d.get(), 15);
-        // let mut v1 = graph2.initial(1);
-        // let mut v2 = graph.initial(2);
-        // let mut v1v2 = graph.compute(move || v1() + v2());
-        // let mut result = graph.compute(move || v1v2() + 5);
-        // let res_val = result();
-        // assert_eq!(res_val, 3);
+    }
+    #[test]
+    fn graph2() {
+        let graph = Graph::<usize>::new();
+        let a = graph.initial(5);
+        let a_c = a.clone();
+        let b = graph.initial(4);
+        let b_c = b.clone();
+        let c = graph.compute(move || a.get() + 6);
+        let d = graph.compute(move || b.get() + c.get());
+        let e = graph.compute(move || b_c.get() * d.get());
+        assert_eq!(e.get(), 60);
+        a_c.set(2);
+        assert_eq!(e.get(), 48);
     }
 }
