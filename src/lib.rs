@@ -15,12 +15,6 @@ impl<T> Value<T> {
     fn value(&self) -> &T {
         &self.value
     }
-    fn set_dirty(&mut self, value: bool) {
-        self.dirty = value;
-    }
-    fn is_dirty(&self) -> bool {
-        self.dirty
-    }
     fn set_value(&mut self, t: T) {
         self.value = t;
     }
@@ -110,8 +104,16 @@ where
             dirty: true,
             epoch: 0,
             value: initial,
-            generator: Box::new(move |g, new_opt| {
-                if let Some(new) = new_opt {
+            generator: Box::new(move |g, old| {
+                let mut parent_deps = g
+                    .current_execution_deps
+                    .try_borrow_mut()
+                    .unwrap_or_else(|_| panic!("value: {:?}", old));
+                if let Some(ref mut parent_deps) = *parent_deps {
+                    parent_deps.push(new_ref);
+                };
+                drop(parent_deps);
+                if let Some(new) = old {
                     new
                 } else {
                     // TODO: Add in dep solving for things above
