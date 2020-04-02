@@ -80,7 +80,12 @@ where
 
     fn set_dirty(&self, val_ref: ValueRef) {
         if let Some(value) = self.content.borrow().get(val_ref) {
-            let deps = value.borrow_mut();
+            let value = &mut value.borrow_mut();
+            if let Some(deps) = &value.deps {
+                for dep in deps {
+                    self.set_dirty(*dep);
+                }
+            }
         }
     }
 }
