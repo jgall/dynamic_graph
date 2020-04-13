@@ -6,7 +6,7 @@ type ValueRef = usize;
 struct Value<T> {
     dirty: bool,
     epoch: usize,
-    generator: Box<(dyn FnMut(&InternalGraph<T>, Option<T>) -> T)>,
+    generator: Box<dyn FnMut(&InternalGraph<T>, Option<T>) -> T>,
     deps: Option<Vec<usize>>,
     value: T,
 }
