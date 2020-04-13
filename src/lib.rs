@@ -97,7 +97,7 @@ where
         }
     }
 
-    pub fn initial<'a, 'b: 'a>(&'b self, initial: T) -> SettableNode<T> {
+    pub fn initial(&self, initial: T) -> SettableNode<T> {
         let inner_graph = self.inner.borrow_mut();
         let new_ref = inner_graph.next_ref();
         let value = Value {
@@ -112,7 +112,6 @@ where
                 if let Some(ref mut parent_deps) = *parent_deps {
                     parent_deps.push(new_ref);
                 };
-                drop(parent_deps);
                 if let Some(new) = old {
                     new
                 } else {
@@ -227,7 +226,8 @@ where
     }
 }
 
-trait Query {}
+// TODO: The nodes in the graph should really be Weak ARC'd (from the perspective of their owning Vec) in the actual array -
+// only strong ARC'd by dependent nodes (so that they're dropped once the dependent nodes are gone - preventing memory leaks).
 
 #[cfg(test)]
 mod tests {
@@ -247,6 +247,7 @@ mod tests {
         let d = graph.compute(move || b.get() + c.get());
         assert_eq!(d.get(), 15);
     }
+
     #[test]
     fn graph2() {
         let graph = Graph::<usize>::new();
